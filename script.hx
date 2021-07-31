@@ -46,6 +46,10 @@ function regularUpdate(dt) {
 			testStatus("Insert And Retrieve One Test", insertAndRetreiveOneTest());
 		case 4:
 			testStatus("Insert Three And Retrieve Three Test", insertThreeAndRetreiveThreeTest());
+		case 5:
+			testStatus("Contains Key Test", containsKeyTest());
+		case 6:
+			testStatus("Contains Three Keys Test", containsThreeKeysTest());
 
 		default:TESTS_ON = false; debug("Testing complete. " + TESTS_PASS + " of " + TESTS_I + " passed.");
 	}
@@ -183,9 +187,75 @@ function insertThreeAndRetreiveThreeTest():Bool {
 	_insert(mapName, "k3", 3);
 	passed = passed && assertRetrieval(mapName, "k1", 1) && assertRetrieval(mapName, "k2", 2) && assertRetrieval(mapName, "k3", 3);
 
+	var fake = _retrieve(mapName, "k4");
+	if(fake != MAP.ERROR.NOTFOUND) {
+		passed = false;
+		debug("Expected to not find key 'k4'");
+	}
+
 	return passed;
 }
 
+function containsKeyTest():Bool {
+	beforeTest();
+
+	debug("Running Contains Key Test");
+	var passed = true;
+	var mapName = "map";
+
+	_create(mapName);
+	_insert(mapName, "key", 123);
+	var found = _containsKey(mapName, "key");
+
+	if(!found) {
+		passed = false;
+		debug("Key was not found");
+	}
+
+	return passed;
+}
+
+function containsThreeKeysTest():Bool {
+	beforeTest();
+
+	debug("Running Contains Three Keys Test");
+	var passed = true;
+	var mapName = "map";
+
+	_create(mapName);
+	_insert(mapName, "k1", 123);
+	_insert(mapName, "k2", 456);
+	_insert(mapName, "k3", 789);
+	var found = _containsKey(mapName, "k1");
+
+	if(!found) {
+		passed = false;
+		debug("k1 was not found");
+	}
+
+	var found = _containsKey(mapName, "k2");
+
+	if(!found) {
+		passed = false;
+		debug("k2 was not found");
+	}
+
+	var found = _containsKey(mapName, "k3");
+
+	if(!found) {
+		passed = false;
+		debug("k3 was not found");
+	}
+
+	var found = _containsKey(mapName, "k4");
+
+	if(found) {
+		passed = false;
+		debug("k4 was found when it should not have been");
+	}
+
+	return passed;
+}
 
 function assertRetrieval(mapName:String, key:String, expected:Dynamic) {
 	var passed = true;
@@ -210,7 +280,52 @@ function testStatus(name:String, status:Bool) {
 	if(status) TESTS_PASS++;
 }
 
-function _create(name:String) {
+
+/**
+ * ==========================================================================
+ * 								Map Functions
+ *
+ * @source: https://github.com/grnt426/Northgard-Hashmap-Impl
+ *
+ * The below functions are used to manage map datastructures.
+ *
+ * Why? Because the limited scripting features we get do not
+ * include this basic data structure, and I kept making mods where
+ * I very much wanted, if not needed, this datastructure.
+ *
+ * You, the user, don't need to know how the below code works! I tried
+ * to make it as friendly as possible and provide many useful APIs.
+ *
+ * You can create as many maps as needed, and they can be as large as
+ * Northgard or your computer memory allows.
+ *
+ * The performance is designed for an average case of O(1). Worst-case
+ * performance of O(n) can happen when the map is nearly full. However,
+ * the map will automatically resize itself through the _insert function
+ * by doubling the array size each time. This should help keep collisions
+ * down and performance higher.
+ *
+ * Example Usage:
+ * 	_create("myMap");
+ *
+ * 	_insert("myMap", "key", 123);
+ * 	_insert("myMap", "anotherKey", "mixed types allowed");
+ *
+ * 	_retrieve("myMap", "key"); // returns the number 123
+ *
+ * 	_create("any number of maps supported");
+ *
+ * 	_containsKey("myMap", "never inserted"); // returns false
+ *
+ * ==========================================================================
+ */
+
+/**
+ * Creates a map with the given name and an initial size.
+ *
+ * @error MAP.ERROR.MAPEXISTS - if a map with that name already exists.
+ */
+function _create(name:String):Int {
 	var existed = _getMap(name);
 	if(existed != null) {
 		if(MAP.DEBUG.MSG)
@@ -305,10 +420,60 @@ function _retrieve(name:String, key:String):Dynamic {
 }
 
 /**
+ * If the key exists in the map, will return true. Will not throw
+ * MAP.ERROR.NOTFOUND errors.
+ *
+ * @return Bool - True if the key was found, otherwise false.
+ * @MAP.ERROR.NOMAP - if the map was not found by the given name.
+ */
+function _containsKey(name:String, key:String):Dynamic {
+	var map = _getMap(name);
+	if(map == null) {
+		if(MAP.DEBUG.MSG)
+			debug("ERROR [MAP]: Map does not exist, '" + name + "'");
+		return MAP.ERROR.NOMAP;
+	}
+
+	var hash = _hash(key);
+	var index = hash % map.size;
+
+	if(map.keys[index] == null) {
+		return false;
+	}
+
+	// To handle collisions, we must check if the key at the given index
+	// is ours, and if not, then keep probing until we have found our key.
+	// Once found, that is where the value is also stored.
+	var indexCount = 0;
+	while(map.keys[index] != null && map.keys[index] != key && indexCount <= map.size) {
+		index = (index++) % map.size;
+		indexCount++;
+	}
+
+	if(indexCount > map.size) {
+		return false;
+	}
+
+	return map.keys[index] == key;
+}
+
+/**
  * Will remove an entry from a given Map. It is safe to call this
- * repeatedly for the same key and for maps that do not exist.
+ * repeatedly for the same key.
+ *
+ * Attempting to delete a key that does not exist in a
+ * full map will cause the entire map to be searched.
+ *
+ * Unlike other functions, this one will maintain idempotency
+ * and will never return a MAP.ERROR.NOTFOUND error. This is
+ * useful in loops where you want to quickly look for objects
+ * which were positively deleted.
+ *
+ * Runtime Complexity: O(n)
+ * Average: O(1)
  *
  * @return Bool - True if the entry was present and removed. Otherwise false.
+ * 					Will return false if not found.
  * @error MAP.ERROR.NOMAP - if there is no map with that name.
  */
 function _delete(name:String, key:String):Dynamic {
@@ -325,7 +490,21 @@ function _delete(name:String, key:String):Dynamic {
 	// We still need to handle collisions, however we have the special case
 	// where we are asked to delete a key that does not exist that must be
 	// handled.
+	var indexCount = 0;
+	while(map.keys[index] != null && map.keys[index] != key && indexCount <= map.size) {
+		index = (index++) % map.size;
+		indexCount++;
+	}
 
+	// In these cases the key was not found
+	if(indexCount > map.size || map.keys[index] == null) {
+		return false;
+	}
+
+	map.keys[index] = null;
+	map.vals[index] = null;
+	map.entries--;
+	return true;
 }
 
 /**
