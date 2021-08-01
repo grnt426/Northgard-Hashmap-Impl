@@ -16,6 +16,7 @@ var MAP = {
 		NOTFOUND:1,
 		NOMAP:2,
 		MAPEXISTS:3,
+		UNDERSIZED:4,
 	},
 };
 
@@ -26,12 +27,13 @@ TESTS_ON = false;
 TESTS_I = 0;
 TESTS_PASS = 0;
 
-
 function init() {
 	TESTS_ON = true;
 }
 
 function regularUpdate(dt) {
+
+
 	if(!TESTS_ON)
 		return;
 
@@ -50,6 +52,8 @@ function regularUpdate(dt) {
 			testStatus("Contains Key Test", containsKeyTest());
 		case 6:
 			testStatus("Contains Three Keys Test", containsThreeKeysTest());
+		case 7:
+			testStatus("Resize Test", resizeTest());
 
 		default:TESTS_ON = false; debug("Testing complete. " + TESTS_PASS + " of " + TESTS_I + " passed.");
 	}
@@ -257,6 +261,45 @@ function containsThreeKeysTest():Bool {
 	return passed;
 }
 
+function resizeTest():Bool {
+	beforeTest();
+
+	debug("Running Resize Test");
+	var passed = true;
+	var mapName = "map";
+
+	var map = _createWithSize(mapName, 3);
+
+	_insert(mapName, "k1", 123);
+	debug("Insert first key");
+	if(map.size != 3) {
+		passed = false;
+		debug("Should not have resized after one element.");
+	}
+	_insert(mapName, "k2", 456);
+	debug("Insert second key");
+	if(map.size != 3) {
+		passed = false;
+		debug("Should not have resized after two elements.");
+	}
+	_insert(mapName, "k3", 789);
+	debug("Insert third key");
+	if(map.size != 3) {
+		passed = false;
+		debug("Should not have resized after three elements.");
+	}
+
+	_insert(mapName, "k4", 2468);
+	debug("Insert fourth key");
+	if(map.size != 6) {
+		passed = false;
+		debug("Should have resized after four elements.");
+	}
+
+	return passed && assertRetrieval(mapName, "k1", 123) && assertRetrieval(mapName, "k2", 456)
+		&& assertRetrieval(mapName, "k3", 789) && assertRetrieval(mapName, "k4", 2468);
+}
+
 function assertRetrieval(mapName:String, key:String, expected:Dynamic) {
 	var passed = true;
 	var retrievedValue = _retrieve(mapName, key);
@@ -323,9 +366,24 @@ function testStatus(name:String, status:Bool) {
 /**
  * Creates a map with the given name and an initial size.
  *
+ * @return - The newly created map.
  * @error MAP.ERROR.MAPEXISTS - if a map with that name already exists.
  */
-function _create(name:String):Int {
+function _create(name:String):Dynamic {
+
+	// 19 was somewhat arbitrarily chosen, but it is prime and is larger
+	// than all the other maps I needed, so should be good enough for
+	// most other modders.
+	return _createWithSize(name, 19);
+}
+
+/**
+ * Creates a map with the given name and an initial size.
+ *
+ * @return - The newly created map with specified size.
+ * @error MAP.ERROR.MAPEXISTS - if a map with that name already exists.
+ */
+function _createWithSize(name:String, size:Int):Dynamic {
 	var existed = _getMap(name);
 	if(existed != null) {
 		if(MAP.DEBUG.MSG)
@@ -336,9 +394,12 @@ function _create(name:String):Int {
 	var keys:Array<String> = [null];
 	var vals:Array<Dynamic> = [null];
 
-	keys.resize(19);
-	vals.resize(19);
-	MAP.maps.push({name:name, size:19, entries:0, keys:keys, vals:vals});
+	keys.resize(size);
+	vals.resize(size);
+	var map = {name:name, size:size, entries:0, keys:keys, vals:vals};
+	MAP.maps.push(map);
+
+	return map;
 }
 
 /**
@@ -350,32 +411,52 @@ function _create(name:String):Int {
  */
 function _insert(name:String, key:String, val:Dynamic):Dynamic {
 	var map = _getMap(name);
+
 	if(map == null) {
 		if(MAP.DEBUG.MSG)
 			debug("ERROR [MAP]: Map does not exist, '" + name + "'");
 		return MAP.ERROR.NOMAP;
 	}
 
+	if(MAP.DEBUG.MSG) {
+		debug("Entries: " + map.entries + " Size: " + map.size + " Resize Threshold: " + (map.size * 0.75));
+		debug("New Entry key: " + key + " value: " + val);
+	}
+
+
 	if(map.entries >= (map.size * 0.75)) {
+		if(MAP.DEBUG.MSG)
+			debug("Resizing...");
 		_resize(map);
 	}
 
 	var hash = _hash(key);
-
 	var index = hash % map.size;
+
+
+
 
 	// If a key already exists, and it isn't our own key, then
 	// we must probe for an empty index. I have chosen a simple
 	// incrementor strategy until this proves poor.
-	while(map.keys[index] != null && map.keys[index] != key) {
+	var indexCount = 0;
+	while(map.keys[index] != null && map.keys[index] != key && indexCount <= map.size) {
 		index = (index++) % map.size;
+		indexCount++;
 	}
 
+	if(indexCount > map.size) {
+		debug("Error: Map is undersized. Should not happen.");
+		return MAP.ERROR.UNDERSIZED;
+	}
+
+	var replacedItself = map.keys[index] == key;
 	map.keys[index] = key;
 	map.vals[index] = val;
 	map.entries++;
+	// debug("wrote key to index: " + index);
 
-	return map.keys[index] == key;
+	return replacedItself;
 }
 
 /**
@@ -512,6 +593,49 @@ function _delete(name:String, key:String):Dynamic {
  */
 function _resize(map:{name:String, size:Int, entries:Int, keys:Array<String>, vals:Array<Dynamic>}) {
 
+	var oldKeys = [];
+	var oldVals = [];
+	var oldSize = map.size;
+
+	var index = 0;
+	while(index < oldSize) {
+		oldKeys.push(map.keys[index]);
+		oldVals.push(map.vals[index]);
+		// debug("K: " + map.keys[index] + " V: " + map.vals[index]);
+		index++;
+	}
+
+	map.entries = 0;
+	map.size = map.size * 2;
+	map.keys = [null];
+	map.vals = [null];
+	map.keys.resize(map.size);
+	map.vals.resize(map.size);
+	debug("reinserting old values");
+
+	index = 0;
+	@sync while(index < oldSize) {
+		if(oldKeys[index] != null) {
+			var key = oldKeys[index];
+			var val = oldVals[index];
+			var hash = _hash(key);
+			var index = hash % map.size;
+
+			// If a key already exists, and it isn't our own key, then
+			// we must probe for an empty index. I have chosen a simple
+			// incrementor strategy until this proves poor.
+			var indexCount = 0;
+			while(map.keys[index] != null && map.keys[index] != key && indexCount <= map.size) {
+				index = (index++) % map.size;
+				indexCount++;
+			}
+
+			map.keys[index] = key;
+			map.vals[index] = val;
+			map.entries++;
+		}
+		index++;
+	}
 }
 
 /**
